@@ -1,7 +1,6 @@
-# son hali
 import tkinter as tk
 from tkinter import messagebox
-from random import randint
+from random import randint, uniform
 import threading
 import time
 
@@ -10,19 +9,21 @@ class ChargeStation:
         self.station_id = station_id
         self.capacity = capacity
         self.current_vehicles = 0
-        self.queue = []  # Sıra için liste
-        self.busy_until = 0  # Şu anki aracın bitiş zamanı
+        self.queue = []
+        self.busy_until = 0
         self.log = []
-        self.wait_time_estimate = 0  # Bekleme süresi tahmini
+        self.wait_time_estimate = 0
+        self.suspicious_vehicles = []  # Şüpheli araçları saklamak için liste
 
     def charge_vehicle(self, vehicle):
         if self.current_vehicles < self.capacity:
             entry_time = time.time()
+            charging_duration = uniform(5, 15)
+            self.busy_until = entry_time + charging_duration
+            exit_time = self.busy_until
             self.current_vehicles += 1
-            self.busy_until = entry_time + 10  # Şarj süresi 10 saniye (örnek için düşürüldü)
-            exit_time = self.busy_until  # Çıkış zamanını kaydet
             self.log.append({"vehicle": vehicle, "entry_time": entry_time, "exit_time": exit_time})
-            self.wait_time_estimate = 0  # Yeni araç girişinde bekleyen aracın tahmini süresini sıfırla
+            self.wait_time_estimate = 0
             return True
         else:
             return False
@@ -43,16 +44,20 @@ class ChargeStation:
                 self.charge_vehicle(next_vehicle)
                 next_vehicle["wait_var"].set("No")
             else:
-                time.sleep(1)  # Şarj istasyonu doluysa bir saniye bekle
+                time.sleep(1)
 
     def calculate_wait_time(self, current_time):
-        # İlk giren aracın şarj süresi bitiş zamanından geçen süreyi hesapla
         return max(0, self.busy_until - current_time)
+
+    def check_suspicious_vehicles(self):
+        for log_entry in self.log:
+            if log_entry["exit_time"] - log_entry["entry_time"] > 12:  # Örnek eşik değeri
+                self.suspicious_vehicles.append(log_entry["vehicle"]["id"])
 
 class Simulation:
     def __init__(self, num_stations=5, num_vehicles=25):
         self.stations = [ChargeStation(i) for i in range(num_stations)]
-        self.vehicles = num_vehicles
+        self.vehicles = [f"Vehicle_{i}" for i in range(num_vehicles)]
         self.create_gui()
 
     def create_gui(self):
@@ -80,13 +85,13 @@ class Simulation:
         self.start_simulation_button.pack(pady=10)
 
     def start_simulation(self):
-        for _ in range(self.vehicles):
+        for vehicle_id in self.vehicles:
             random_station = randint(0, len(self.stations) - 1)
             station = self.stations[random_station]
-            vehicle = {"wait_var": tk.StringVar(), "entry_time": None, "exit_time": None}
+            vehicle = {"id": vehicle_id, "wait_var": tk.StringVar(), "entry_time": None, "exit_time": None}
             vehicle["entry_time"] = time.time()
             if station.charge_vehicle(vehicle):
-                message = f"Vehicle charged at Station {station.station_id}"
+                message = f"{vehicle['id']} charged at Station {station.station_id}"
                 self.update_gui()
             else:
                 if station.is_busy():
@@ -95,19 +100,20 @@ class Simulation:
                     wait_response = self.ask_wait(station, available_stations, wait_time)
                     if wait_response:
                         station.add_to_queue(vehicle)
-                        message = f"Vehicle added to the queue at Station {station.station_id}."
+                        message = f"{vehicle['id']} added to the queue at Station {station.station_id}."
                     else:
                         message = f"All stations are full. Try again later."
                         vehicle["wait_var"].set("No")
                 else:
                     station.add_to_queue(vehicle)
-                    message = f"Vehicle added to the queue at Station {station.station_id}."
+                    message = f"{vehicle['id']} added to the queue at Station {station.station_id}."
 
             self.root.update()
-            time.sleep(1)  # Araçlar arası 1 saniye bekle
+            time.sleep(1)
             threading.Thread(target=station.process_queue).start()
 
-        self.display_logs()  # Simülasyon tamamlandığında log ekranını göster
+        self.display_logs()
+        self.check_suspicious_vehicles()
 
     def ask_wait(self, station, available_stations, wait_time):
         response = messagebox.askquestion("Station Full", f"Station {station.station_id} is full. Estimated wait time: {wait_time:.2f} seconds.\nWhat do you want to do?\nAvailable stations: {', '.join(map(str, available_stations))}.", detail="Choose 'Yes' to wait or 'No' to find another station.")
@@ -132,7 +138,7 @@ class Simulation:
         log_window = tk.Toplevel(self.root)
         log_window.title("Simulation Logs")
 
-        log_text = tk.Text(log_window, height=20, width=60)
+        log_text = tk.Text(log_window, height=30, width=90)
         log_text.pack()
 
         log_text.insert(tk.END, "Simulation Logs:\n\n")
@@ -141,8 +147,24 @@ class Simulation:
             for log_entry in station.log:
                 entry_time = time.strftime("%H:%M:%S", time.localtime(log_entry["entry_time"]))
                 exit_time = time.strftime("%H:%M:%S", time.localtime(log_entry["exit_time"])) if log_entry["exit_time"] else "N/A"
-                log_text.insert(tk.END, f"  Vehicle Entry Time: {entry_time} Exit Time: {exit_time}\n")
+
+                suspicious = log_entry["exit_time"] - log_entry["entry_time"] > 12
+
+                log_text.insert(tk.END, f"  Vehicle ID: {log_entry['vehicle']['id']} Entry Time: {entry_time} Exit Time: {exit_time} {'(Suspicious)' if suspicious else ''}\n")
             log_text.insert(tk.END, "\n")
+
+    def check_suspicious_vehicles(self):
+        suspicious_vehicles = []
+        for station in self.stations:
+            station.check_suspicious_vehicles()
+            suspicious_vehicles.extend(station.suspicious_vehicles)
+
+        if suspicious_vehicles:
+            print("Suspicious Vehicles:")
+            for vehicle_id in set(suspicious_vehicles):
+                print(f"  {vehicle_id}")
+        else:
+            print("No suspicious vehicles.")
 
     def run(self):
         self.root.mainloop()
